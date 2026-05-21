@@ -5,21 +5,26 @@ Monorepo for the Solmar battery telemetry firmware.
 It contains two independent PlatformIO firmwares plus one shared protocol
 header:
 
-- `firmware/gateway`: reads Felicity/Felicity ESS BMS data over RS485 Modbus,
-  publishes to MQTT in WiFi mode, and broadcasts the main battery data over
-  ESP-NOW.
+- `firmware/gateway`: reads Felicity/Felicity ESS BMS data over RS485 Modbus
+  and broadcasts the main battery data over ESP-NOW.
 - `firmware/receiver-lcd`: receives the ESP-NOW battery packet on a second
   ESP32-C3 and shows the main values on a 16x2 I2C LCD.
 - `shared`: common ESP-NOW packet format used by both firmwares.
+
+The active firmware does not publish data through MQTT and does not connect to
+a WiFi network. ESP-NOW still uses the ESP32 radio internally, but it does not
+need a router, SSID, password or MQTT broker.
 
 Keeping the ESP-NOW packet in `shared/espnow_battery_packet.h` avoids a common
 embedded bug: the sender and receiver silently drifting to different binary
 layouts.
 
+Possible future integrations are tracked in [TODO.md](TODO.md), including
+MQTT/WiFi publishing and LoRa.
+
 ## Gateway
 
-The gateway is the board connected to the battery RS485 bus. Upload only one
-gateway firmware, depending on which board you are using.
+The gateway is the board connected to the battery RS485 bus.
 
 If the `pio` command is not available in your terminal, replace `pio` with the
 full PlatformIO path:
@@ -38,44 +43,30 @@ If only one ESP32 is connected, PlatformIO usually detects the port
 automatically. If more than one board is connected, pass the upload port
 explicitly with `--upload-port COMx`.
 
-Build the serial-only ESP32-C3 gateway without uploading:
+Build the ESP32-C3 gateway without uploading:
 
 ```sh
 cd firmware/gateway
-pio run -e esp32-c3-serial
+pio run -e esp32-c3-gateway
 ```
 
-Upload the serial-only ESP32-C3 gateway:
+Upload the ESP32-C3 gateway:
 
 ```sh
 cd firmware/gateway
-pio run -e esp32-c3-serial -t upload
+pio run -e esp32-c3-gateway -t upload
 ```
 
 Upload it to a specific port:
 
 ```sh
-pio run -e esp32-c3-serial -t upload --upload-port COM5
+pio run -e esp32-c3-gateway -t upload --upload-port COM5
 ```
 
 Open the serial monitor for this gateway:
 
 ```sh
 pio device monitor -b 9600
-```
-
-Build the ESP32 WiFi/MQTT gateway without uploading:
-
-```sh
-cd firmware/gateway
-pio run -e esp32dev
-```
-
-Upload the ESP32 WiFi/MQTT gateway:
-
-```sh
-cd firmware/gateway
-pio run -e esp32dev -t upload
 ```
 
 Compile the ESP-NOW packet unit test:
@@ -123,14 +114,12 @@ pio device monitor -b 115200
 
 The receiver and sender must use the same ESP-NOW channel.
 
-For the serial-only gateway, this is `ESP_NOW_WIFI_CHANNEL` in
+The gateway setting is `ESP_NOW_WIFI_CHANNEL` in
 `firmware/gateway/platformio.ini`. The receiver has the same setting in
 `firmware/receiver-lcd/platformio.ini`. The default value is channel `1` in
 both firmwares.
 
-For the WiFi/MQTT gateway, the radio follows the connected access point channel,
-so set the receiver's `ESP_NOW_WIFI_CHANNEL` to the WiFi router channel. For
-example, if the router uses channel `6`, set this in the receiver:
+If you change the channel, change it in both firmwares:
 
 ```ini
 build_flags =

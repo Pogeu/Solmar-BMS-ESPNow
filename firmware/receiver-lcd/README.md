@@ -41,5 +41,4 @@ pio run -e esp32-c3-lcd-receiver -t upload --upload-port COM6
 ```
 
 If the display keeps showing `Sem dados`, confirm that the sender and receiver
-use the same `ESP_NOW_WIFI_CHANNEL`. If the sender is connected to WiFi/MQTT,
-the receiver must use the WiFi router channel, not necessarily channel `1`.
+use the same `ESP_NOW_WIFI_CHANNEL`.

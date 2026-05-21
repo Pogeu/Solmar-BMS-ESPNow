@@ -1,38 +1,29 @@
 # Gateway Firmware
 
 Reads Felicity/Felicity ESS BMS values over RS485 Modbus and broadcasts the
-main battery data over ESP-NOW. In the `esp32dev` environment it also keeps the
-existing WiFi, web configuration and MQTT publishing behavior.
+main battery data over ESP-NOW.
 
-Build the default ESP32-C3 serial-only gateway:
+This firmware intentionally does not publish through MQTT and does not connect
+to a WiFi network. ESP-NOW uses the ESP32 radio directly, without SSID,
+password, router or MQTT broker.
+
+Build the ESP32-C3 gateway:
 
 ```sh
-pio run -e esp32-c3-serial
+pio run -e esp32-c3-gateway
 ```
 
-Upload the default ESP32-C3 serial-only gateway:
+Upload the ESP32-C3 gateway:
 
 ```sh
-pio run -e esp32-c3-serial -t upload
-```
-
-Build the WiFi/MQTT ESP32 gateway:
-
-```sh
-pio run -e esp32dev
-```
-
-Upload the WiFi/MQTT ESP32 gateway:
-
-```sh
-pio run -e esp32dev -t upload
+pio run -e esp32-c3-gateway -t upload
 ```
 
 If more than one board is connected, list ports and choose one explicitly:
 
 ```sh
 pio device list
-pio run -e esp32-c3-serial -t upload --upload-port COM5
+pio run -e esp32-c3-gateway -t upload --upload-port COM5
 ```
 
 Open the monitor:

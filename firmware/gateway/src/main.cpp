@@ -1,36 +1,14 @@
 //
-// This is part of the FelicityBMS2MQTT project
+// Solmar BMS ESP-NOW gateway
 //
-// https://github.com/Smartsmurf/FelicityBMS2MQTT
-// 
-// 
 #include <Arduino.h>
 
 #include "espnow_battery.h"
 #include "felicity.h"
 #include "main.h"
 
-#if !SERIAL_ONLY_MODE
-#include <Preferences.h>
-#include <WebServer.h>
-#include <WiFi.h>
-
-#include "html.h"
-#include "mqtt.h"
-#include "settings.h"
-#endif
-
 FelicityBMS * bms;
 QueueHandle_t bmsQueue;
-
-#if !SERIAL_ONLY_MODE
-unsigned long lastWifiCheck = 0;
-
-void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info){
-    lastWifiCheck = millis();
-    WiFi.begin(ssid.c_str(), password.c_str());
-}
-#endif
 
 static void startBmsTasks(int rx, int tx, int de, int re, int battery_count)
 {
@@ -47,7 +25,6 @@ static void startBmsTasks(int rx, int tx, int de, int re, int battery_count)
   xTaskCreatePinnedToCore(FelicityBMS::bmsTaskWrapper, "BMS", 4096, bms, 1, NULL, FELICITY_TASK_CORE);
 }
 
-#if SERIAL_ONLY_MODE
 static void printSerialMessage(const BmsMessage &msg)
 {
   Serial.printf("[BMS%d]\n", msg.deviceId);
@@ -113,8 +90,9 @@ static void printSerialMessage(const BmsMessage &msg)
 
 static void serial_debug_task(void *param)
 {
-  BmsMessage msg;
+  (void)param;
 
+  BmsMessage msg;
   for (;;) {
     if (xQueueReceive(bmsQueue, &msg, portMAX_DELAY) == pdTRUE) {
       espnowBatteryHandleMessage(msg);
@@ -122,81 +100,22 @@ static void serial_debug_task(void *param)
     }
   }
 }
-#endif
 
-void setup() {
-
+void setup()
+{
   Serial.begin(SERIAL_DEBUG_BAUD);
   Serial.println("Starting up...");
+  Serial.println("Gateway mode: RS485 input, ESP-NOW output.");
+  Serial.println("MQTT/WiFi publishing is disabled in this firmware.");
 
-#if SERIAL_ONLY_MODE
-  Serial.println("Serial-only mode: MQTT is disabled.");
   espnowBatteryBegin();
   startBmsTasks(RS485_RX_PIN, RS485_TX_PIN, RS485_DE_PIN, RS485_RE_PIN, BMS_BATTERY_COUNT);
   xTaskCreatePinnedToCore(serial_debug_task, "SerialDebug", 4096, NULL, 1, NULL, FELICITY_TASK_CORE);
+
   Serial.println("System started.");
-  return;
-#else
-  loadSettings();
-
-  WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-
-  if (ssid != "") {
-    WiFi.begin(ssid.c_str(), password.c_str());
-    WiFi.setAutoReconnect(true);
-    Serial.print("Trying to connect to SSID: ");
-    Serial.println(ssid);
-
-    unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
-      delay(500);
-      Serial.print(".");
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nWIFI connected.");
-      Serial.print("IP: ");
-      Serial.println(WiFi.localIP());
-      startWebServer();
-      espnowBatteryBegin();
-
-      startBmsTasks(rxPin, txPin, RS485_DE_PIN, RS485_RE_PIN, batteryCount);
-      xTaskCreatePinnedToCore(mqtt_task, "MQTT", 4096, NULL, 1, NULL, FELICITY_TASK_CORE);
-
-      Serial.println("System started.");
-
-      analogWrite(LED_PIN, 255);
-
-      return;
-    } else {
-      Serial.println("\nWIFI connection failed.");
-    }
-  }
-
-  // no WIFI - run config AP
-  startConfigPortal();
-#endif
 }
 
-void loop() {
-
-#if SERIAL_ONLY_MODE
+void loop()
+{
   delay(1000);
-#else
-  server.handleClient();
-
-  // check WIFI state
-  unsigned long now = millis();
-  if (now - lastWifiCheck >= 10000) {
-    lastWifiCheck = now;
-
-    if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("WIFI disconnected! Trying reconnect...");
-
-      WiFi.disconnect();  // sanity
-      WiFi.begin(ssid.c_str(), password.c_str());
-    }
-  }
-#endif
-
 }
