@@ -79,6 +79,13 @@ cd firmware/gateway
 pio test -e espnow-packet-test --without-uploading --without-testing
 ```
 
+## Verificações no GitHub
+
+O repositório tem um workflow para pull requests:
+
+- `.github/workflows/ci.yml`: compila o firmware do gateway, compila os testes
+  PlatformIO e compila o receptor LCD.
+
 ## Receptor LCD
 
 O receptor LCD é o segundo ESP32-C3. Ele não é conectado ao RS485. Ele apenas

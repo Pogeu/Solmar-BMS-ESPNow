@@ -1,0 +1,37 @@
+name: Firmware CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  platformio:
+    name: PlatformIO build and tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Build gateway firmware
+        working-directory: firmware/gateway
+        run: pio run -e esp32-c3-gateway
+
+      - name: Compile gateway unit tests
+        working-directory: firmware/gateway
+        run: pio test -e espnow-packet-test --without-uploading --without-testing
+
+      - name: Build receiver LCD firmware
+        working-directory: firmware/receiver-lcd
+        run: pio run -e esp32-c3-lcd-receiver
