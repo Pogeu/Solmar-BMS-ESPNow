@@ -4,10 +4,9 @@ Project task list for the Solmar BMS Gateway firmwares and dashboard.
 
 ### Todo
 
-- [ ] Add optional LoRa telemetry [#4](https://github.com/Pogeu/Solmar-BMS-Gateway/issues/4) ~3d #feat #lora
-  - [ ] Choose target LoRa module and pinout
-  - [ ] Define payload format or reuse the gateway JSON telemetry schema
-  - [ ] Add receiver example for LoRa data
+- [ ] Validate live LoRa telemetry with the physical E90-DTU and E220 pairs [#4](https://github.com/Pogeu/Solmar-BMS-Gateway/issues/4) ~4h #test #lora
+- [ ] Validate A7670SA MQTT, GNSS and NEO-6M fallback in the remote field setup ~4h #test #gps #mqtt
+- [ ] Decide and implement local SD logging on the CYD display board ~4h #storage #cyd
 
 - [ ] Add stale-data indicator on the LCD receiver [#5](https://github.com/Pogeu/Solmar-BMS-Gateway/issues/5) ~4h #ux
   - [ ] Show when the last ESP-NOW packet is older than the timeout
@@ -33,3 +32,7 @@ Project task list for the Solmar BMS Gateway firmwares and dashboard.
 - [x] Add ESP-NOW packet unit test build ~3h #test
 - [x] Add WiFiManager/MQTT publishing for the LCD-direct gateway ~2d #feat #mqtt
 - [x] Add web dashboard for remote battery monitoring ~1d #feat #dashboard
+- [x] Add optional LoRa telemetry for E90-DTU and E220-900T22D ~3d #feat #lora
+- [x] Add ESP32-S3 central with A7670SA, NEO-6M fallback GPS, LoRa, MQTT and OTA ~3d #feat #gateway
+- [x] Add dashboard map, dark mode, cell radar chart and user-to-boat distance ~1d #feat #dashboard
+- [x] Add CYD touch display receiver with partial redraw and page switching ~1d #feat #cyd

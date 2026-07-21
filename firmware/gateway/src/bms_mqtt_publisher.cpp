@@ -13,6 +13,7 @@
 #include <WiFiManager.h>
 #include <string.h>
 
+#include "bms_a7670_modem.h"
 #include "bms_telemetry_json.h"
 #include "main.h"
 
@@ -78,6 +79,19 @@
 
 #ifndef BMS_WIFI_AP_PASSWORD
 #define BMS_WIFI_AP_PASSWORD ""
+#endif
+
+#define BMS_INTERNET_SOURCE_WIFI_ONLY 1
+#define BMS_INTERNET_SOURCE_A7670_ONLY 2
+#define BMS_INTERNET_SOURCE_WIFI_FIRST 3
+#define BMS_INTERNET_SOURCE_A7670_FIRST 4
+
+#ifndef BMS_INTERNET_SOURCE
+#define BMS_INTERNET_SOURCE BMS_INTERNET_SOURCE_WIFI_ONLY
+#endif
+
+#ifndef BMS_MQTT_TOPIC_BUFFER_SIZE
+#define BMS_MQTT_TOPIC_BUFFER_SIZE 128
 #endif
 
 class BmsNetworkTransport {
@@ -153,6 +167,41 @@ static uint32_t latestMqttReconnectAttemptMs = 0;
 static bool mqttStarted = false;
 static char mqttPayloadBuffer[BMS_MQTT_BUFFER_SIZE];
 static char mqttTopicBuffer[BMS_MQTT_TOPIC_BUFFER_SIZE];
+
+static bool wifiAllowed()
+{
+  return BMS_INTERNET_SOURCE == BMS_INTERNET_SOURCE_WIFI_ONLY ||
+         BMS_INTERNET_SOURCE == BMS_INTERNET_SOURCE_WIFI_FIRST ||
+         BMS_INTERNET_SOURCE == BMS_INTERNET_SOURCE_A7670_FIRST;
+}
+
+static bool a7670Allowed()
+{
+  return BMS_INTERNET_SOURCE == BMS_INTERNET_SOURCE_A7670_ONLY ||
+         BMS_INTERNET_SOURCE == BMS_INTERNET_SOURCE_WIFI_FIRST ||
+         BMS_INTERNET_SOURCE == BMS_INTERNET_SOURCE_A7670_FIRST;
+}
+
+static bool a7670Preferred()
+{
+  return BMS_INTERNET_SOURCE == BMS_INTERNET_SOURCE_A7670_ONLY ||
+         BMS_INTERNET_SOURCE == BMS_INTERNET_SOURCE_A7670_FIRST;
+}
+
+static const char *internetSourceName()
+{
+  switch (BMS_INTERNET_SOURCE) {
+    case BMS_INTERNET_SOURCE_A7670_ONLY:
+      return "a7670-only";
+    case BMS_INTERNET_SOURCE_WIFI_FIRST:
+      return "wifi-first";
+    case BMS_INTERNET_SOURCE_A7670_FIRST:
+      return "a7670-first";
+    case BMS_INTERNET_SOURCE_WIFI_ONLY:
+    default:
+      return "wifi-only";
+  }
+}
 
 static void buildClientId(char *buffer, size_t bufferSize)
 {
@@ -232,6 +281,58 @@ static bool buildTopic(const BmsMessage &msg)
   return written > 0 && (size_t)written < sizeof(mqttTopicBuffer);
 }
 
+static bool buildRawTopic(const char *relativeTopic)
+{
+  if (relativeTopic == nullptr) {
+    return false;
+  }
+
+  int written = snprintf(mqttTopicBuffer,
+                         sizeof(mqttTopicBuffer),
+                         "%s/%s",
+                         BMS_MQTT_TOPIC_BASE,
+                         relativeTopic);
+
+  return written > 0 && (size_t)written < sizeof(mqttTopicBuffer);
+}
+
+static bool publishWifi(const char *topic, const char *payload, bool retain)
+{
+  if (!wifiAllowed() || !ensureMqttConnected()) {
+    return false;
+  }
+
+  bool ok = mqttClient.publish(topic, payload, retain);
+  if (!ok) {
+    writeLog("[MQTT] WiFi publish failed, topic=%s state=%d\n", topic, mqttClient.state());
+    return false;
+  }
+
+  return true;
+}
+
+static bool publishA7670(const char *topic, const char *payload, bool retain)
+{
+  if (!a7670Allowed()) {
+    return false;
+  }
+
+  bool ok = bmsA7670MqttPublish(topic, payload, retain);
+  if (!ok) {
+    writeLog("[MQTT] A7670 publish failed, topic=%s status=%s\n", topic, bmsA7670StatusText());
+  }
+  return ok;
+}
+
+static bool publishSelectedTransport(const char *topic, const char *payload, bool retain)
+{
+  if (a7670Preferred()) {
+    return publishA7670(topic, payload, retain) || publishWifi(topic, payload, retain);
+  }
+
+  return publishWifi(topic, payload, retain) || publishA7670(topic, payload, retain);
+}
+
 bool bmsMqttPublisherBegin()
 {
   if (mqttStarted) {
@@ -239,29 +340,35 @@ bool bmsMqttPublisherBegin()
   }
 
   mqttStarted = true;
-  writeLog("[MQTT] Network backend: %s\n", networkTransport.name());
+  writeLog("[MQTT] Internet source: %s\n", internetSourceName());
   mqttClient.setServer(BMS_MQTT_HOST, BMS_MQTT_PORT);
   mqttClient.setBufferSize(BMS_MQTT_BUFFER_SIZE);
 
-  networkTransport.begin();
-  return ensureMqttConnected();
+  if (wifiAllowed()) {
+    writeLog("[MQTT] WiFi backend: %s\n", networkTransport.name());
+    networkTransport.begin();
+  }
+
+  if (a7670Allowed()) {
+    bmsA7670Begin();
+  }
+
+  return bmsMqttPublisherIsReady();
 }
 
 void bmsMqttPublisherLoop()
 {
-  if (!ensureMqttConnected()) {
-    return;
+  if (wifiAllowed() && ensureMqttConnected()) {
+    mqttClient.loop();
   }
 
-  mqttClient.loop();
+  if (a7670Allowed()) {
+    bmsA7670Loop();
+  }
 }
 
 bool bmsMqttPublisherHandleMessage(const BmsMessage &msg)
 {
-  if (!ensureMqttConnected()) {
-    return false;
-  }
-
   if (!buildTopic(msg)) {
     writeLog("[MQTT] Topic too long for BMS%u %s\n",
              (unsigned)msg.deviceId,
@@ -276,18 +383,23 @@ bool bmsMqttPublisherHandleMessage(const BmsMessage &msg)
     return false;
   }
 
-  bool ok = mqttClient.publish(mqttTopicBuffer, mqttPayloadBuffer, BMS_MQTT_RETAIN != 0);
-  if (!ok) {
-    writeLog("[MQTT] Publish failed, topic=%s state=%d\n", mqttTopicBuffer, mqttClient.state());
+  return publishSelectedTransport(mqttTopicBuffer, mqttPayloadBuffer, BMS_MQTT_RETAIN != 0);
+}
+
+bool bmsMqttPublisherPublishRaw(const char *relativeTopic, const char *payload, bool retain)
+{
+  if (payload == nullptr || !buildRawTopic(relativeTopic)) {
     return false;
   }
 
-  return true;
+  return publishSelectedTransport(mqttTopicBuffer, payload, retain);
 }
 
 bool bmsMqttPublisherIsReady()
 {
-  return mqttStarted && networkTransport.connected() && mqttClient.connected();
+  bool wifiReady = wifiAllowed() && networkTransport.connected() && mqttClient.connected();
+  bool a7670Ready = a7670Allowed() && bmsA7670IsReady();
+  return mqttStarted && (wifiReady || a7670Ready);
 }
 
 #else
@@ -304,6 +416,14 @@ void bmsMqttPublisherLoop()
 bool bmsMqttPublisherHandleMessage(const BmsMessage &msg)
 {
   (void)msg;
+  return false;
+}
+
+bool bmsMqttPublisherPublishRaw(const char *relativeTopic, const char *payload, bool retain)
+{
+  (void)relativeTopic;
+  (void)payload;
+  (void)retain;
   return false;
 }
 

@@ -2,6 +2,7 @@
 // Solmar BMS Gateway
 //
 #include <Arduino.h>
+#include <math.h>
 
 #if BMS_LCD_DIRECT_MODE
 #include <SPI.h>
@@ -12,12 +13,33 @@
 
 #include "bms_sd_logger.h"
 #include "bms_mqtt_publisher.h"
+#include "bms_lora_publisher.h"
+#include "bms_location.h"
+#include "bms_ota.h"
 #include "felicity.h"
 #include "main.h"
+
+#ifndef BMS_CENTRAL_MODE
+#define BMS_CENTRAL_MODE 0
+#endif
 
 #ifndef BMS_DISPLAY_STANDALONE_TEST
 #define BMS_DISPLAY_STANDALONE_TEST 0
 #endif
+
+#ifndef BMS_LOCATION_PUBLISH_INTERVAL_MS
+#define BMS_LOCATION_PUBLISH_INTERVAL_MS 10000
+#endif
+
+#ifndef BMS_CENTRAL_DEMO_ESPNOW
+#define BMS_CENTRAL_DEMO_ESPNOW 0
+#endif
+
+#ifndef BMS_CENTRAL_DEMO_ESPNOW_INTERVAL_MS
+#define BMS_CENTRAL_DEMO_ESPNOW_INTERVAL_MS 1000
+#endif
+
+static void printSerialMessage(const BmsMessage &msg);
 
 #if BMS_LCD_DIRECT_MODE
 #ifndef DISPLAY_SPI_SCK_PIN
@@ -677,6 +699,67 @@ static void updateDirectDisplay()
 
 FelicityBMS * bms;
 QueueHandle_t bmsQueue;
+static uint32_t latestLocationPublishMs = 0;
+static uint32_t latestCentralDemoEspNowMs = 0;
+static uint32_t centralDemoSequence = 0;
+
+static void publishLocation()
+{
+#if BMS_LOCATION_ENABLE && BMS_MQTT_ENABLE
+  uint32_t now = millis();
+  if (latestLocationPublishMs != 0 &&
+      now - latestLocationPublishMs < BMS_LOCATION_PUBLISH_INTERVAL_MS) {
+    return;
+  }
+
+  latestLocationPublishMs = now;
+  char payload[320];
+  if (!bmsLocationBuildJson(payload, sizeof(payload))) {
+    writeLog("[GPS] Location payload truncated\n");
+    return;
+  }
+
+  bmsMqttPublisherPublishRaw("location/v1", payload, true);
+  writeLog("[GPS] %s\n", payload);
+#endif
+}
+
+static BmsMessage makeCentralDemoBatteryMessage()
+{
+  float phase = (centralDemoSequence % 60) / 60.0f;
+  float current = -10.0f + sinf(phase * 6.2831853f) * 4.0f;
+  float voltage = 52.2f + sinf(phase * 6.2831853f * 0.7f) * 0.5f;
+
+  BmsMessage msg = {};
+  msg.deviceId = 1;
+  msg.type = BMS_TYPE_BATTERY_INFO;
+  msg.payload.batteryInfo.batteryChargeEnable = true;
+  msg.payload.batteryInfo.batteryDischargeEnable = true;
+  msg.payload.batteryInfo.voltage = voltage;
+  msg.payload.batteryInfo.current = current;
+  msg.payload.batteryInfo.packPowerW = voltage * current;
+  msg.payload.batteryInfo.soc = 72 + (uint16_t)(sinf(phase * 6.2831853f * 0.4f) * 5.0f);
+  msg.payload.batteryInfo.batteryTemperatureValid = true;
+  msg.payload.batteryInfo.tempC = 29.0f + sinf(phase * 6.2831853f) * 2.0f;
+  return msg;
+}
+
+static void updateCentralDemoEspNow()
+{
+#if BMS_CENTRAL_DEMO_ESPNOW
+  uint32_t now = millis();
+  if (latestCentralDemoEspNowMs != 0 &&
+      now - latestCentralDemoEspNowMs < BMS_CENTRAL_DEMO_ESPNOW_INTERVAL_MS) {
+    return;
+  }
+
+  latestCentralDemoEspNowMs = now;
+  centralDemoSequence++;
+  BmsMessage msg = makeCentralDemoBatteryMessage();
+  espnowBatteryHandleMessage(msg);
+  printSerialMessage(msg);
+#endif
+}
 
 static void startBmsTasks(int rx, int tx, int de, int re, int battery_count)
 {
@@ -770,6 +853,7 @@ static void serial_debug_task(void *param)
   for (;;) {
     if (xQueueReceive(bmsQueue, &msg, portMAX_DELAY) == pdTRUE) {
       bmsSdLoggerHandleMessage(msg);
+      bmsLoraPublisherHandleMessage(msg);
       espnowBatteryHandleMessage(msg);
       printSerialMessage(msg);
     }
@@ -782,7 +866,22 @@ void setup()
   Serial.begin(SERIAL_DEBUG_BAUD);
   Serial.println("Starting up...");
 
-#if BMS_LCD_DIRECT_MODE
+#if BMS_CENTRAL_MODE
+  Serial.println("Gateway mode: ESP32-S3 central, RS485 input, MQTT/LoRa/front-panel output.");
+  Serial.println("Local microSD logging is disabled in this mode.");
+
+#if BMS_CENTRAL_DEMO_ESPNOW
+  Serial.println("Central ESP-NOW demo mode: fake BMS packets only.");
+  espnowBatteryBegin();
+#else
+  bmsMqttPublisherBegin();
+  bmsOtaBegin();
+  espnowBatteryBegin();
+  bmsLoraPublisherBegin();
+  bmsLocationBegin();
+  startBmsTasks(RS485_RX_PIN, RS485_TX_PIN, RS485_DE_PIN, RS485_RE_PIN, BMS_BATTERY_COUNT);
+#endif
+#elif BMS_LCD_DIRECT_MODE
   Serial.println("Gateway mode: RS485 input, direct display output.");
   Serial.println("ESP-NOW is disabled in this firmware.");
 
@@ -800,6 +899,7 @@ void setup()
   showTextPage("Teste BMS", "SPI", "Simulando bateria", "Sem RS485 real", "Botao troca pag", "");
 #else
   bmsSdLoggerBegin();
+  bmsLoraPublisherBegin();
   startBmsTasks(RS485_RX_PIN, RS485_TX_PIN, RS485_DE_PIN, RS485_RE_PIN, BMS_BATTERY_COUNT);
   bmsMqttPublisherBegin();
 #endif
@@ -809,6 +909,7 @@ void setup()
 
   espnowBatteryBegin();
   bmsSdLoggerBegin();
+  bmsLoraPublisherBegin();
   startBmsTasks(RS485_RX_PIN, RS485_TX_PIN, RS485_DE_PIN, RS485_RE_PIN, BMS_BATTERY_COUNT);
   xTaskCreatePinnedToCore(serial_debug_task, "SerialDebug", 4096, NULL, 1, NULL, FELICITY_TASK_CORE);
 #endif
@@ -818,7 +919,27 @@ void setup()
 
 void loop()
 {
-#if BMS_LCD_DIRECT_MODE
+#if BMS_CENTRAL_MODE
+#if BMS_CENTRAL_DEMO_ESPNOW
+  updateCentralDemoEspNow();
+  delay(10);
+#else
+  BmsMessage msg;
+  while (bmsQueue != nullptr && xQueueReceive(bmsQueue, &msg, 0) == pdTRUE) {
+    espnowBatteryHandleMessage(msg);
+    bmsMqttPublisherHandleMessage(msg);
+    bmsLoraPublisherHandleMessage(msg);
+    printSerialMessage(msg);
+  }
+
+  bmsOtaLoop();
+  bmsLocationLoop();
+  publishLocation();
+  bmsMqttPublisherLoop();
+  bmsLoraPublisherLoop();
+  delay(10);
+#endif
+#elif BMS_LCD_DIRECT_MODE
   pollPageButton();
 
 #if BMS_DISPLAY_STANDALONE_TEST
@@ -831,11 +952,13 @@ void loop()
     handleDirectDisplayMessage(msg);
     bmsSdLoggerHandleMessage(msg);
     bmsMqttPublisherHandleMessage(msg);
+    bmsLoraPublisherHandleMessage(msg);
     printSerialMessage(msg);
   }
 
   updateDirectDisplay();
   bmsMqttPublisherLoop();
+  bmsLoraPublisherLoop();
   delay(10);
 #endif
 #else

@@ -35,10 +35,10 @@ do BMS em informação de uso:
 - ESP-NOW: transporte local sem roteador quando o LCD esta em outra placa.
 - MQTT/WiFi: transporte atual para o dashboard remoto.
 
-O ambiente mais completo hoje é `esp32-s3-gateway-lcd-direct`: uma placa lê a
-BMS via RS485, atualiza o display local, grava no microSD e publica no MQTT. O
-ambiente `esp32-s3-gateway` continua disponível quando for melhor separar a
-placa que lê a BMS da placa que mostra o display.
+O ambiente principal hoje é `esp32-s3-gateway-lcd-direct`: uma placa lê a BMS
+via RS485, atualiza o display local e grava no microSD. As variantes
+`esp32-s3-gateway-lcd-direct-mqtt` e `esp32-s3-gateway-lcd-direct-lora-*`
+acrescentam telemetria remota sem mudar a leitura da bateria.
 
 Possíveis integrações futuras ficam listadas em [TODO.md](TODO.md), incluindo
 LoRa e troca do backend WiFi por GSM.
@@ -49,8 +49,8 @@ O gateway é a placa conectada ao barramento RS485 da bateria. Ele pode operar e
 duas topologias principais:
 
 - `esp32-s3-gateway`: lê a BMS e envia um pacote ESP-NOW para outro ESP32-S3.
-- `esp32-s3-gateway-lcd-direct`: lê a BMS, atualiza o display local, grava microSD e
-  publica MQTT para o dashboard.
+- `esp32-s3-gateway-lcd-direct`: lê a BMS, atualiza o display local e grava
+  microSD. Variantes do mesmo alvo adicionam MQTT ou LoRa.
 
 Se o comando `pio` não estiver disponível no terminal, substitua `pio` pelo
 caminho completo do PlatformIO:
@@ -177,13 +177,13 @@ Se o receptor continuar mostrando `Sem dados`, confira primeiro:
 - o receptor recebeu o firmware do receptor, não o firmware do gateway
 - a pinagem SPI do display corresponde ao `platformio.ini`
 
-## Gateway com display direto, microSD e MQTT
+## Gateway com display direto, microSD e telemetria opcional
 
 O ambiente `esp32-s3-gateway-lcd-direct` usa uma única placa ESP32-S3 conectada
-ao RS485 da bateria e ao display grafico SPI. Esse é o caminho principal para transformar a
-leitura da bateria em informação local e remota. Nesse modo o ESP-NOW fica
+ao RS485 da bateria e ao display grafico SPI. Esse é o caminho principal para
+transformar a leitura da bateria em informação local. Nesse modo o ESP-NOW fica
 desativado, e o firmware também grava cada leitura do BMS no microSD em JSON
-Lines:
+Lines. As variantes `-mqtt` e `-lora-*` adicionam telemetria remota:
 
 ```text
 /bms_log.jsonl
@@ -283,8 +283,8 @@ valores sinteticos enviados para o display.
 
 ### Dashboard remoto por MQTT
 
-O mesmo ambiente `esp32-s3-gateway-lcd-direct` tambem pode publicar cada leitura
-em MQTT. A conexao WiFi usa WiFiManager: na primeira configuracao, ou se nao
+O ambiente `esp32-s3-gateway-lcd-direct-mqtt` publica cada leitura em MQTT. A
+conexao WiFi usa WiFiManager: na primeira configuracao, ou se nao
 houver credenciais salvas, o ESP abre o portal `Solmar-BMS-Setup` por ate 120
 segundos. Se o WiFi nao for configurado, a leitura RS485, o LCD e o microSD
 continuam funcionando.
@@ -316,6 +316,99 @@ Para implementar GSM no futuro, troque o backend de rede desse modulo por um
 cliente compativel com `Client`, como TinyGSM, sem alterar o parser do BMS nem a
 pagina.
 
+### Envio por LoRa E90-DTU ou E220
+
+O modo direto tambem tem duas variantes com envio LoRa por UART transparente.
+Elas reutilizam o payload JSON `solmar.bms.reading.v1`, mas por padrao enviam
+somente mensagens `battery_info` a cada 5 segundos para evitar ocupar o enlace
+LoRa com dados grandes de celulas e limites.
+
+Ambientes:
+
+```sh
+cd firmware/gateway
+pio run -e esp32-s3-gateway-lcd-direct-lora-e90-dtu
+pio run -e esp32-s3-gateway-lcd-direct-lora-e220
+```
+
+Upload:
+
+```sh
+pio run -e esp32-s3-gateway-lcd-direct-lora-e90-dtu -t upload
+pio run -e esp32-s3-gateway-lcd-direct-lora-e220 -t upload
+```
+
+Pinagem do E90-DTU usando a porta RS485 do DTU com um transceiver RS485 no
+ESP32-S3:
+
+| Sinal local | ESP32-S3 |
+|---|---|
+| RX do ESP32-S3, vindo do RO do transceiver | GPIO14 |
+| TX do ESP32-S3, indo para DI do transceiver | GPIO13 |
+| DE + RE do transceiver | GPIO12 |
+
+Se usar a porta RS232 do E90-DTU com MAX3232, remova o controle local DE/RE no
+ambiente ajustando `BMS_LORA_E90_DE_RE_PIN=-1`.
+
+Pinagem do E220-900T22D:
+
+| E220 | ESP32-S3 |
+|---|---|
+| TXD -> RX do ESP32-S3 | GPIO14 |
+| RXD <- TX do ESP32-S3 | GPIO13 |
+| M0 | GPIO11 |
+| M1 | GPIO12 |
+| AUX | GPIO18 |
+
+Os dois modulos do par precisam estar configurados com os mesmos parametros de
+radio e baud serial. Esta implementacao nao tenta fazer E90-DTU conversar com
+E220; use par igual com par igual.
+
+Codigos simples de bancada para testar envio e recebimento ficam em
+`firmware/lora-tests`. Eles funcionam em ESP32 e Arduino UNO/Nano e imprimem no
+monitor serial tudo que chega pelo radio.
+
+
+## Tela touch CYD ESP32-2432S028R
+
+O firmware `firmware/cyd-display` e a interface local nova para a placa
+ESP32-2432S028R / Cheap Yellow Display. Ele substitui o LCD 128x64 quando a
+tela fica em uma segunda placa, recebe os pacotes `EspNowBatteryPacket` por
+ESP-NOW e atualiza somente as areas dinamicas para reduzir flicker.
+
+A parte inferior da tela troca entre quatro paineis: resumo, comunicacao,
+celulas e GPS/enlace. A troca funciona pelo toque na tela ou pelo botao BOOT.
+O SD onboard da placa CYD fica reservado para uma etapa futura de log local.
+
+Pinagem configurada:
+
+| Funcao | ESP32 |
+|---|---|
+| TFT MISO | GPIO12 |
+| TFT MOSI | GPIO13 |
+| TFT SCLK | GPIO14 |
+| TFT CS | GPIO15 |
+| TFT DC | GPIO2 |
+| TFT BL | GPIO21 |
+| Touch CS | GPIO33 |
+| Touch CLK | GPIO25 |
+| Touch MISO / T_DO | GPIO39 |
+| Touch MOSI / T_DIN | GPIO32 |
+| Touch IRQ | GPIO36 |
+| Botao BOOT / pagina | GPIO0 |
+
+Build e upload:
+
+```powershell
+C:\Users\pedro\.platformio\penv\Scripts\platformio.exe run -d firmware\cyd-display -e esp32-cyd-battery-screen
+C:\Users\pedro\.platformio\penv\Scripts\platformio.exe run -d firmware\cyd-display -e esp32-cyd-battery-screen -t upload --upload-port COM8
+```
+
+Modo demo sem central:
+
+```powershell
+C:\Users\pedro\.platformio\penv\Scripts\platformio.exe run -d firmware\cyd-display -e esp32-cyd-battery-screen-demo -t upload --upload-port COM8
+```
 
 ## Fontes usadas
 

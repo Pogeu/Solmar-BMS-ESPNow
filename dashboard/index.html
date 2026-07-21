@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Solmar BMS Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
     :root {
       color-scheme: light;
@@ -19,6 +21,21 @@
       --warn: #a65b00;
       --danger: #b42318;
       --shadow: 0 12px 32px rgba(23, 33, 27, 0.08);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #101513;
+      --surface: #18211d;
+      --surface-2: #202b26;
+      --text: #eef6f1;
+      --muted: #9cada4;
+      --line: #314139;
+      --accent: #41c47d;
+      --accent-2: #77dea3;
+      --warn: #f2b85b;
+      --danger: #ff8b7f;
+      --shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
     }
 
     * {
@@ -49,6 +66,14 @@
       justify-content: space-between;
       gap: 16px;
       margin-bottom: 18px;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 10px;
     }
 
     .eyebrow {
@@ -136,6 +161,10 @@
       background: #fbfdfb;
       color: var(--text);
       outline: none;
+    }
+
+    :root[data-theme="dark"] input {
+      background: #111815;
     }
 
     input:focus {
@@ -319,10 +348,62 @@
       font-weight: 700;
     }
 
+    .radar-panel {
+      margin-top: 14px;
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }
+
+    .radar-panel h3 {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    #cellRadar {
+      display: block;
+      width: 100%;
+      max-width: 420px;
+      height: 300px;
+    }
+
     .raw-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 14px;
+    }
+
+    .map-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.55fr);
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .map-shell {
+      min-height: 360px;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    #locationMap {
+      width: 100%;
+      height: 360px;
+      background: var(--surface-2);
+    }
+
+    .leaflet-container {
+      font: inherit;
+    }
+
+    :root[data-theme="dark"] .leaflet-tile {
+      filter: brightness(0.78) contrast(1.08) saturate(0.75);
+    }
+
+    .map-actions {
+      margin-top: 14px;
     }
 
     pre {
@@ -350,6 +431,7 @@
       .connection-panel,
       .summary-grid,
       .detail-grid,
+      .map-grid,
       .raw-grid {
         grid-template-columns: 1fr;
       }
@@ -374,6 +456,10 @@
         flex-direction: column;
       }
 
+      .top-actions {
+        justify-content: flex-start;
+      }
+
       .card,
       .connection-panel {
         padding: 12px;
@@ -388,7 +474,10 @@
         <p class="eyebrow">Solmar BMS</p>
         <h1>Dashboard da bateria</h1>
       </div>
-      <div id="connectionPill" class="pill bad">Desconectado</div>
+      <div class="top-actions">
+        <button id="themeButton" class="secondary" type="button">Modo escuro</button>
+        <div id="connectionPill" class="pill bad">Desconectado</div>
+      </div>
     </header>
 
     <section class="connection-panel" aria-label="Conexao MQTT">
@@ -398,7 +487,7 @@
       </label>
       <label>
         Filtro de topico
-        <input id="topicInput" autocomplete="off" value="solmar/bms/felicity-fla12171/readings/v1/+/+">
+        <input id="topicInput" autocomplete="off" value="solmar/bms/felicity-fla12171/#">
       </label>
       <button id="connectButton" type="button">Conectar</button>
       <button id="demoButton" class="secondary" type="button">Demo</button>
@@ -456,11 +545,31 @@
           <div class="empty">Aguardando pacote cell_voltages</div>
         </div>
         <div class="chips" id="temperatureChips"></div>
+        <div class="radar-panel">
+          <h3>Teia de aranha das celulas</h3>
+          <canvas id="cellRadar" width="420" height="300"></canvas>
+        </div>
       </article>
 
       <article class="card">
         <h2>Falhas</h2>
         <div class="fault-list" id="faultList"></div>
+      </article>
+    </section>
+
+    <section class="map-grid" aria-label="Localizacao da central">
+      <article class="card map-shell">
+        <div id="locationMap"></div>
+      </article>
+
+      <article class="card">
+        <h2>Localizacao</h2>
+        <div class="status-list" id="locationList">
+          <div class="empty">Aguardando pacote location/v1</div>
+        </div>
+        <div class="map-actions">
+          <button id="userLocationButton" class="secondary" type="button">Minha posicao</button>
+        </div>
       </article>
     </section>
 
@@ -479,7 +588,7 @@
 
   <script>
     const DEFAULT_BROKER = "wss://broker.hivemq.com:8884/mqtt";
-    const DEFAULT_TOPIC = "solmar/bms/felicity-fla12171/readings/v1/+/+";
+    const DEFAULT_TOPIC = "solmar/bms/felicity-fla12171/#";
     const STALE_AFTER_MS = 15000;
 
     const elements = {
@@ -487,6 +596,7 @@
       topicInput: document.getElementById("topicInput"),
       connectButton: document.getElementById("connectButton"),
       demoButton: document.getElementById("demoButton"),
+      themeButton: document.getElementById("themeButton"),
       connectionPill: document.getElementById("connectionPill"),
       socRing: document.getElementById("socRing"),
       socValue: document.getElementById("socValue"),
@@ -499,8 +609,12 @@
       statusList: document.getElementById("statusList"),
       limitsList: document.getElementById("limitsList"),
       cellList: document.getElementById("cellList"),
+      cellRadar: document.getElementById("cellRadar"),
       temperatureChips: document.getElementById("temperatureChips"),
       faultList: document.getElementById("faultList"),
+      locationList: document.getElementById("locationList"),
+      locationMap: document.getElementById("locationMap"),
+      userLocationButton: document.getElementById("userLocationButton"),
       lastTopic: document.getElementById("lastTopic"),
       lastPayload: document.getElementById("lastPayload"),
     };
@@ -518,7 +632,17 @@
       cells: null,
       limits: null,
       version: null,
+      location: null,
+      lastLocationAt: 0,
       meta: null,
+      map: null,
+      marker: null,
+      userLocation: null,
+      userMarker: null,
+      distanceLine: null,
+      locationWatchId: null,
+      locatingUser: false,
+      locationError: "",
     };
 
     const faultFields = [
@@ -533,6 +657,7 @@
 
     const savedBroker = localStorage.getItem("solmar-bms-broker");
     const savedTopic = localStorage.getItem("solmar-bms-topic");
+    const savedTheme = localStorage.getItem("solmar-bms-theme");
     elements.brokerInput.value = savedBroker || DEFAULT_BROKER;
     elements.topicInput.value = savedTopic || DEFAULT_TOPIC;
 
@@ -549,6 +674,12 @@
       return "--";
     }
 
+    function formatDistance(meters) {
+      if (!Number.isFinite(meters)) return "--";
+      if (meters < 1000) return `${formatNumber(meters, 0)} m`;
+      return `${formatNumber(meters / 1000, 2)} km`;
+    }
+
     function timeAgo(timestamp) {
       if (!timestamp) return "Aguardando leitura MQTT";
       const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
@@ -558,6 +689,48 @@
 
     function row(label, value) {
       return `<div class="row"><span>${label}</span><strong>${value}</strong></div>`;
+    }
+
+    function applyTheme(theme) {
+      const nextTheme = theme === "dark" ? "dark" : "light";
+      document.documentElement.dataset.theme = nextTheme;
+      elements.themeButton.textContent = nextTheme === "dark" ? "Modo claro" : "Modo escuro";
+      localStorage.setItem("solmar-bms-theme", nextTheme);
+      drawCellRadar();
+      if (state.map) {
+        setTimeout(() => state.map.invalidateSize(), 0);
+      }
+    }
+
+    function toggleTheme() {
+      applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+    }
+
+    function haversineMeters(a, b) {
+      const toRad = (degrees) => degrees * Math.PI / 180;
+      const earthRadiusM = 6371000;
+      const lat1 = toRad(a.latitude);
+      const lat2 = toRad(b.latitude);
+      const dLat = toRad(b.latitude - a.latitude);
+      const dLon = toRad(b.longitude - a.longitude);
+      const h = Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+      return 2 * earthRadiusM * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+    }
+
+    function boatLocation() {
+      const location = state.location;
+      if (!location || location.valid !== true) return null;
+      const latitude = Number(location.latitude);
+      const longitude = Number(location.longitude);
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+      return { latitude, longitude };
+    }
+
+    function boatDistanceMeters() {
+      const boat = boatLocation();
+      if (!boat || !state.userLocation) return NaN;
+      return haversineMeters(state.userLocation, boat);
     }
 
     function setConnectionPill(text, mode) {
@@ -592,6 +765,20 @@
         state.version = message.data || {};
       }
 
+      render();
+    }
+
+    function receiveLocation(message, topic, rawPayload) {
+      if (!message || message.schema !== "solmar.location.v1") {
+        return;
+      }
+
+      state.messageCount += 1;
+      state.lastMessageAt = Date.now();
+      state.lastLocationAt = Date.now();
+      state.latestTopic = topic || "";
+      state.latestPayload = rawPayload || JSON.stringify(message, null, 2);
+      state.location = message;
       render();
     }
 
@@ -654,6 +841,100 @@
       ].join("");
     }
 
+    function cssColor(name) {
+      return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    function drawCellRadar() {
+      const canvas = elements.cellRadar;
+      if (!canvas) return;
+
+      const ctx = canvas.getContext("2d");
+      const rect = canvas.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(320, Math.round(rect.width || canvas.width));
+      const height = Math.max(260, Math.round(rect.height || canvas.height));
+      canvas.width = Math.round(width * ratio);
+      canvas.height = Math.round(height * ratio);
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+
+      const text = cssColor("--text");
+      const muted = cssColor("--muted");
+      const line = cssColor("--line");
+      const accent = cssColor("--accent");
+      const cells = state.cells || {};
+      const voltages = Array.isArray(cells.cell_voltages_v) ? cells.cell_voltages_v : [];
+      const cx = width / 2;
+      const cy = height / 2 + 8;
+      const radius = Math.min(width, height) * 0.36;
+
+      ctx.fillStyle = muted;
+      ctx.textAlign = "center";
+      ctx.font = "700 13px Inter, Segoe UI, Arial, sans-serif";
+      if (!voltages.length) {
+        ctx.fillText("Aguardando cell_voltages", cx, cy);
+        return;
+      }
+
+      const min = Math.min(...voltages);
+      const max = Math.max(...voltages);
+      const center = voltages.reduce((sum, value) => sum + value, 0) / voltages.length;
+      const range = Math.max(0.006, (max - min) * 2.2);
+      const low = center - range / 2;
+
+      ctx.strokeStyle = line;
+      ctx.lineWidth = 1;
+      for (let ring = 1; ring <= 4; ring++) {
+        const r = radius * ring / 4;
+        ctx.beginPath();
+        voltages.forEach((_, index) => {
+          const angle = -Math.PI / 2 + index * 2 * Math.PI / voltages.length;
+          const x = cx + Math.cos(angle) * r;
+          const y = cy + Math.sin(angle) * r;
+          if (index === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.closePath();
+        ctx.stroke();
+      }
+
+      voltages.forEach((_, index) => {
+        const angle = -Math.PI / 2 + index * 2 * Math.PI / voltages.length;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius);
+        ctx.stroke();
+
+        const labelX = cx + Math.cos(angle) * (radius + 19);
+        const labelY = cy + Math.sin(angle) * (radius + 19) + 4;
+        ctx.fillStyle = muted;
+        ctx.font = "700 10px Inter, Segoe UI, Arial, sans-serif";
+        ctx.fillText(`${index + 1}`, labelX, labelY);
+      });
+
+      ctx.beginPath();
+      voltages.forEach((value, index) => {
+        const angle = -Math.PI / 2 + index * 2 * Math.PI / voltages.length;
+        const normalized = Math.max(0.1, Math.min(1, (value - low) / range));
+        const r = radius * normalized;
+        const x = cx + Math.cos(angle) * r;
+        const y = cy + Math.sin(angle) * r;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.fillStyle = "rgba(65, 196, 125, 0.20)";
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 2;
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = text;
+      ctx.font = "800 12px Inter, Segoe UI, Arial, sans-serif";
+      ctx.fillText(`min ${formatNumber(min, 3)} V   max ${formatNumber(max, 3)} V   delta ${formatNumber((max - min) * 1000, 0)} mV`, cx, 18);
+    }
+
     function renderCells() {
       const cells = state.cells || {};
       const voltages = Array.isArray(cells.cell_voltages_v) ? cells.cell_voltages_v : [];
@@ -688,6 +969,7 @@
       temps.forEach((temp, index) => summary.push(`T${index + 1} ${formatNumber(temp, 1)} C`));
 
       elements.temperatureChips.innerHTML = summary.map((item) => `<span class="chip">${item}</span>`).join("");
+      drawCellRadar();
     }
 
     function renderFaults() {
@@ -707,6 +989,153 @@
       elements.faultList.innerHTML = active.map(([, label]) => row(label, "Ativa")).join("");
     }
 
+    function ensureMap() {
+      if (state.map || !window.L) {
+        return;
+      }
+
+      state.map = L.map(elements.locationMap, {
+        zoomControl: true,
+        attributionControl: true,
+      }).setView([-22.9068, -43.1729], 5);
+
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap",
+      }).addTo(state.map);
+    }
+
+    function renderUserPosition() {
+      if (!state.map) return;
+
+      const user = state.userLocation;
+      if (!user) {
+        if (state.userMarker) {
+          state.userMarker.remove();
+          state.userMarker = null;
+        }
+        if (state.distanceLine) {
+          state.distanceLine.remove();
+          state.distanceLine = null;
+        }
+        return;
+      }
+
+      const userLatLng = [user.latitude, user.longitude];
+      if (!state.userMarker) {
+        state.userMarker = L.circleMarker(userLatLng, {
+          radius: 8,
+          weight: 3,
+          color: "#1d4ed8",
+          fillColor: "#60a5fa",
+          fillOpacity: 0.85,
+        }).addTo(state.map);
+      } else {
+        state.userMarker.setLatLng(userLatLng);
+      }
+      state.userMarker.bindPopup(`Sua posicao<br>${formatNumber(user.latitude, 6)}, ${formatNumber(user.longitude, 6)}`);
+
+      const boat = boatLocation();
+      if (!boat) return;
+
+      const boatLatLng = [boat.latitude, boat.longitude];
+      if (!state.distanceLine) {
+        state.distanceLine = L.polyline([userLatLng, boatLatLng], {
+          color: "#2563eb",
+          weight: 3,
+          dashArray: "8 8",
+        }).addTo(state.map);
+      } else {
+        state.distanceLine.setLatLngs([userLatLng, boatLatLng]);
+      }
+
+      state.map.fitBounds(L.latLngBounds([userLatLng, boatLatLng]).pad(0.22), {
+        maxZoom: 15,
+        animate: false,
+      });
+    }
+
+    function renderLocation() {
+      ensureMap();
+
+      const location = state.location;
+      if (!location) {
+        elements.locationList.innerHTML = `<div class="empty">Aguardando pacote location/v1</div>`;
+        renderUserPosition();
+        return;
+      }
+
+      const valid = location.valid === true &&
+        Number.isFinite(Number(location.latitude)) &&
+        Number.isFinite(Number(location.longitude));
+
+      elements.locationList.innerHTML = [
+        row("Fonte", location.source || "none"),
+        row("Fix valido", formatBool(location.valid === true)),
+        row("Latitude", valid ? formatNumber(location.latitude, 7) : "--"),
+        row("Longitude", valid ? formatNumber(location.longitude, 7) : "--"),
+        row("Altitude", `${formatNumber(location.altitude_m, 1)} m`),
+        row("Velocidade", `${formatNumber(location.speed_kmh, 1)} km/h`),
+        row("Satelites", location.satellites ?? "--"),
+        row("A7670", formatBool(location.a7670_valid === true)),
+        row("NEO-6M", formatBool(location.neo6m_valid === true)),
+        row("Sua posicao", state.userLocation ? "Ativa" : (state.locationError || "--")),
+        row("Distancia", formatDistance(boatDistanceMeters())),
+        row("Recebido", timeAgo(state.lastLocationAt)),
+      ].join("");
+
+      if (!valid || !state.map) {
+        renderUserPosition();
+        return;
+      }
+
+      const latLng = [Number(location.latitude), Number(location.longitude)];
+      if (!state.marker) {
+        state.marker = L.marker(latLng).addTo(state.map);
+      } else {
+        state.marker.setLatLng(latLng);
+      }
+      state.marker.bindPopup(`Central Solmar<br>${formatNumber(location.latitude, 6)}, ${formatNumber(location.longitude, 6)}`);
+      if (!state.userLocation) {
+        state.map.setView(latLng, Math.max(state.map.getZoom(), 15));
+      }
+      renderUserPosition();
+      setTimeout(() => state.map.invalidateSize(), 0);
+    }
+
+    function requestUserLocation() {
+      if (!navigator.geolocation) {
+        state.locationError = "GPS do navegador indisponivel";
+        renderLocation();
+        return;
+      }
+
+      state.locatingUser = true;
+      state.locationError = "Localizando";
+      elements.userLocationButton.textContent = "Localizando...";
+      navigator.geolocation.getCurrentPosition((position) => {
+        state.locatingUser = false;
+        state.locationError = "";
+        state.userLocation = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyM: position.coords.accuracy,
+          updatedAt: Date.now(),
+        };
+        elements.userLocationButton.textContent = "Atualizar posicao";
+        renderLocation();
+      }, (error) => {
+        state.locatingUser = false;
+        state.locationError = error.message || "Sem permissao";
+        elements.userLocationButton.textContent = "Minha posicao";
+        renderLocation();
+      }, {
+        enableHighAccuracy: true,
+        timeout: 12000,
+        maximumAge: 10000,
+      });
+    }
+
     function renderRaw() {
       elements.lastTopic.textContent = state.latestTopic || "Nenhum pacote recebido.";
       elements.lastPayload.textContent = state.latestPayload || "Nenhum pacote recebido.";
@@ -719,6 +1148,7 @@
       renderLimits();
       renderCells();
       renderFaults();
+      renderLocation();
       renderRaw();
     }
 
@@ -730,6 +1160,15 @@
       state.connected = false;
       state.subscribed = false;
       render();
+    }
+
+    function buildSubscriptionFilters(topicFilter) {
+      const filters = new Set([topicFilter]);
+      const readingsSuffix = "/readings/v1/+/+";
+      if (topicFilter.endsWith(readingsSuffix)) {
+        filters.add(`${topicFilter.slice(0, -readingsSuffix.length)}/location/v1`);
+      }
+      return Array.from(filters);
     }
 
     function connectMqtt() {
@@ -762,7 +1201,7 @@
 
       client.on("connect", () => {
         state.connected = true;
-        client.subscribe(topicFilter, { qos: 0 }, (error) => {
+        client.subscribe(buildSubscriptionFilters(topicFilter), { qos: 0 }, (error) => {
           state.subscribed = !error;
           setConnectionPill(error ? `Erro ao assinar: ${error.message}` : "MQTT conectado", error ? "bad" : "ok");
           render();
@@ -788,7 +1227,10 @@
       client.on("message", (topic, payload) => {
         const rawPayload = payload.toString();
         try {
-          receiveTelemetry(JSON.parse(rawPayload), topic, JSON.stringify(JSON.parse(rawPayload), null, 2));
+          const parsed = JSON.parse(rawPayload);
+          const prettyPayload = JSON.stringify(parsed, null, 2);
+          receiveTelemetry(parsed, topic, prettyPayload);
+          receiveLocation(parsed, topic, prettyPayload);
         } catch (error) {
           state.latestTopic = topic;
           state.latestPayload = `Payload invalido: ${error.message}\n\n${rawPayload}`;
@@ -861,6 +1303,21 @@
           discharge_current_limit_a: 120.0,
         },
       }, "demo/solmar/bms/felicity-fla12171/readings/v1/1/charge_discharge");
+
+      receiveLocation({
+        schema: "solmar.location.v1",
+        uptime_ms: sequence * 1000,
+        source: "a7670",
+        valid: true,
+        latitude: -22.9068,
+        longitude: -43.1729,
+        altitude_m: 12.0,
+        speed_kmh: 0.0,
+        satellites: 9,
+        age_ms: 0,
+        a7670_valid: true,
+        neo6m_valid: false,
+      }, "demo/solmar/bms/felicity-fla12171/location/v1");
     }
 
     elements.connectButton.addEventListener("click", () => {
@@ -872,8 +1329,12 @@
     });
 
     elements.demoButton.addEventListener("click", pushDemoData);
+    elements.themeButton.addEventListener("click", toggleTheme);
+    elements.userLocationButton.addEventListener("click", requestUserLocation);
+    window.addEventListener("resize", drawCellRadar);
 
     setInterval(renderConnectionStatus, 1000);
+    applyTheme(savedTheme || "light");
     render();
   </script>
 </body>
