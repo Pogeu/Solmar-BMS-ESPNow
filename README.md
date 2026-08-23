@@ -418,3 +418,13 @@ C:\Users\pedro\.platformio\penv\Scripts\platformio.exe run -d firmware\cyd-displ
 | [alexbenisch/felicity-bms](https://github.com/alexbenisch/felicity-bms) | Confirmou os comandos RS485 `0xF80B`, `0x1302` e `0x132A`, os offsets internos de tensão/corrente/SOC e o fallback `0x132A len 0x14` para ler 16 slots de célula + 4 temperaturas. |
 | [mr-manuel/venus-os_dbus-serialbattery](https://github.com/mr-manuel/venus-os_dbus-serialbattery) | Não foi usado como mapa Modbus, mas ajudou a confirmar o comportamento da BMS Felicity: células em mV, temperaturas filtrando `0x7FFF` e existência de campos internos como versão, modelo, serial, warnings e faults via BLE. |
 | [Manual Felicity FLA12171-EU](./FLA12171-EU%20User%20Guide%20-%20English.pdf) | Usado para validar o modelo da bateria, tensão nominal, faixa de operação, limites elétricos, comunicação RS485/CAN e pinagem do conector. |
+
+## Conexões entre dispositivos
+
+Fluxo lógico do gateway BMS:
+
+1. **Sensores / packs BMS** comunicam com o módulo de aquisição (UART/CAN conforme o hardware).
+2. **Gateway Solmar** normaliza a telemetria e publica na rede superior (Ethernet/MQTT/Modbus).
+3. **SCADA / nuvem** consome os tópicos ou registradores expostos pelo gateway.
+
+Consulte os arquivos de configuração no repositório para pinagem e endereços do seu site.
